@@ -1,0 +1,49 @@
+{
+  "version": "2.3.0",
+  "working_dir": "ai-organizational-innovation-2026-01-18",
+  "created_at": "2026-01-18T10:00:00Z",
+  "updated_at": "2026-01-18T10:00:00Z",
+  "research": {
+    "topic": "AI와 조직혁신의 상관관계 연구",
+    "topic_slug": "ai-organizational-innovation",
+    "mode": "topic",
+    "type": null,
+    "discipline": null,
+    "research_questions": [],
+    "hypotheses": []
+  },
+  "workflow": {
+    "current_phase": "phase0",
+    "current_step": 1,
+    "total_steps": 150,
+    "last_checkpoint": null,
+    "last_agent": null
+  },
+  "paths": {
+    "base_dir": "/Users/test/thesis-output",
+    "output_dir": "ai-organizational-innovation-2026-01-18",
+    "absolute_path": "/Users/test/thesis-output/ai-organizational-innovation-2026-01-18"
+  },
+  "options": {
+    "literature_depth": "comprehensive",
+    "theoretical_framework": "existing",
+    "citation_style": "apa7",
+    "citation_config": {
+      "style_key": "apa7",
+      "display_name": "APA 7th Edition",
+      "note_type": "endnotes",
+      "in_text_format": "author_year_parenthetical",
+      "in_text_example": "(Smith, 2024) or Smith (2024)",
+      "bibliography_title": "References",
+      "bibliography_title_ko": "참고문헌"
+    },
+    "language": "korean",
+    "thesis_format": "traditional_5chapter"
+  },
+  "quality": {
+    "srcs_scores": [],
+    "gra_validations": [],
+    "plagiarism_checks": []
+  },
+  "context_snapshots": []
+}

@@ -1,0 +1,427 @@
+#!/usr/bin/env python3
+"""Unit tests for workflow_validator.py.
+
+These tests verify that the validation system works correctly
+WITHOUT affecting the existing workflow.
+"""
+
+import pytest
+from pathlib import Path
+import tempfile
+import shutil
+import sys
+
+# Add scripts directory to path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / ".claude" / "skills" / "thesis-orchestrator" / "scripts"))
+
+from workflow_validator import (
+    WorkflowValidator,
+    DependencyValidator,
+    ValidationError,
+    DependencyError,
+    REQUIRED_OUTPUTS,
+    STEP_DEPENDENCIES
+)
+
+
+# ============================================================================
+# Fixtures
+# ============================================================================
+
+@pytest.fixture
+def temp_working_dir():
+    """Create a temporary working directory for testing."""
+    temp_dir = Path(tempfile.mkdtemp())
+
+    # Create phase directories
+    (temp_dir / "00-session").mkdir(parents=True)
+    (temp_dir / "01-literature").mkdir(parents=True)
+    (temp_dir / "02-research-design").mkdir(parents=True)
+    (temp_dir / "03-thesis").mkdir(parents=True)
+    (temp_dir / "04-publication").mkdir(parents=True)
+
+    yield temp_dir
+
+    # Cleanup
+    shutil.rmtree(temp_dir)
+
+
+@pytest.fixture
+def validator(temp_working_dir):
+    """Create a validator instance."""
+    return WorkflowValidator(temp_working_dir)
+
+
+@pytest.fixture
+def dep_validator(temp_working_dir):
+    """Create a dependency validator instance."""
+    return DependencyValidator(temp_working_dir)
+
+
+# ============================================================================
+# Basic Validation Tests
+# ============================================================================
+
+def test_validator_initialization(temp_working_dir):
+    """Test that validator initializes correctly."""
+    validator = WorkflowValidator(temp_working_dir)
+    assert validator.working_dir == temp_working_dir
+
+
+def test_validator_nonexistent_directory():
+    """Test that validator raises error for nonexistent directory."""
+    with pytest.raises(ValueError, match="does not exist"):
+        WorkflowValidator(Path("/nonexistent/directory"))
+
+
+def test_validate_step_no_requirements(validator):
+    """Test validation for steps with no requirements."""
+    # Step 2 has no requirements defined
+    success, missing = validator.validate_step(2)
+    assert success is True
+    assert missing == []
+
+
+def test_validate_step_missing_file(validator, temp_working_dir):
+    """Test validation fails when required file is missing."""
+    # Step 1 requires 00-session/session.json
+    success, missing = validator.validate_step(1)
+    assert success is False
+    assert "00-session/session.json" in missing
+
+
+def test_validate_step_file_exists(validator, temp_working_dir):
+    """Test validation passes when required file exists."""
+    # Create required file for step 1
+    (temp_working_dir / "00-session" / "session.json").write_text("{}")
+
+    success, missing = validator.validate_step(1)
+    assert success is True
+    assert missing == []
+
+
+def test_validate_step_glob_pattern(validator, temp_working_dir):
+    """Test validation with glob patterns."""
+    # Step 115 requires chapter1-*.md
+    (temp_working_dir / "03-thesis" / "chapter1-introduction.md").write_text("# Chapter 1")
+
+    success, missing = validator.validate_step(115)
+    assert success is True
+    assert missing == []
+
+
+def test_validate_step_glob_no_match(validator, temp_working_dir):
+    """Test validation fails when glob pattern has no match."""
+    # Step 115 requires chapter1-*.md but no file exists
+    success, missing = validator.validate_step(115)
+    assert success is False
+    assert any("chapter1-" in m for m in missing)
+
+
+# ============================================================================
+# Chapter Validation Tests (Critical)
+# ============================================================================
+
+def test_all_chapters_missing(validator):
+    """Test that all 5 chapters are detected as missing."""
+    for step, pattern in [(115, "chapter1"), (117, "chapter2"),
+                          (119, "chapter3"), (121, "chapter4"),
+                          (123, "chapter5")]:
+        success, missing = validator.validate_step(step)
+        assert success is False
+        assert any(pattern in m for m in missing)
+
+
+def test_all_chapters_present(validator, temp_working_dir):
+    """Test that all 5 chapters are validated when present."""
+    # Create all 5 chapters
+    for i in range(1, 6):
+        (temp_working_dir / "03-thesis" / f"chapter{i}-test.md").write_text(f"# Chapter {i}")
+
+    # Validate each chapter step
+    for step in [115, 117, 119, 121, 123]:
+        success, missing = validator.validate_step(step)
+        assert success is True, f"Step {step} validation failed"
+
+
+def test_final_thesis_validation(validator, temp_working_dir):
+    """Test validation of final integrated thesis."""
+    # Step 129 requires thesis-final.md
+    success, missing = validator.validate_step(129)
+    assert success is False
+    assert "thesis-final.md" in str(missing)
+
+    # Create the file
+    (temp_working_dir / "03-thesis" / "thesis-final.md").write_text("# Final Thesis")
+
+    success, missing = validator.validate_step(129)
+    assert success is True
+
+
+# ============================================================================
+# Verbose Validation Tests
+# ============================================================================
+
+def test_validate_step_verbose_success(validator, temp_working_dir):
+    """Test verbose validation with success."""
+    (temp_working_dir / "00-session" / "session.json").write_text("{}")
+
+    result = validator.validate_step_verbose(1)
+    assert result.success is True
+    assert result.step == 1
+    assert result.missing_files == []
+    assert "passed" in result.message.lower()
+
+
+def test_validate_step_verbose_failure(validator):
+    """Test verbose validation with failure."""
+    result = validator.validate_step_verbose(1)
+    assert result.success is False
+    assert result.step == 1
+    assert len(result.missing_files) > 0
+    assert "failed" in result.message.lower()
+
+
+# ============================================================================
+# Enforce Validation Tests (Fail-Fast)
+# ============================================================================
+
+def test_enforce_step_raises_error(validator):
+    """Test that enforce_step raises ValidationError on failure."""
+    with pytest.raises(ValidationError, match="Step 1 validation failed"):
+        validator.enforce_step(1)
+
+
+def test_enforce_step_passes(validator, temp_working_dir):
+    """Test that enforce_step does not raise error on success."""
+    (temp_working_dir / "00-session" / "session.json").write_text("{}")
+
+    # Should not raise
+    validator.enforce_step(1)
+
+
+# ============================================================================
+# Phase Validation Tests
+# ============================================================================
+
+def test_validate_phase_all_missing(validator):
+    """Test phase validation when all files are missing."""
+    failures = validator.validate_phase(0)
+
+    # Phase 0 has steps 1 and 7 with requirements
+    assert 1 in failures
+    assert 7 in failures
+
+
+def test_validate_phase_partial(validator, temp_working_dir):
+    """Test phase validation with partial completion."""
+    # Create file for step 1 only
+    (temp_working_dir / "00-session" / "session.json").write_text("{}")
+
+    failures = validator.validate_phase(0)
+
+    # Step 1 should pass, step 7 should fail
+    assert 1 not in failures
+    assert 7 in failures
+
+
+def test_validate_phase_all_pass(validator, temp_working_dir):
+    """Test phase validation when all files exist."""
+    # Create all required files for phase 0
+    (temp_working_dir / "00-session" / "session.json").write_text("{}")
+    (temp_working_dir / "00-session" / "todo-checklist.md").write_text("# Checklist")
+
+    failures = validator.validate_phase(0)
+    assert len(failures) == 0
+
+
+# ============================================================================
+# Critical Steps Validation
+# ============================================================================
+
+def test_validate_critical_steps_all_missing(validator):
+    """Test validation of all critical steps when missing."""
+    failures = validator.validate_critical_steps()
+
+    # Should have many failures
+    assert len(failures) > 10
+
+    # Chapter steps should all fail
+    for step in [115, 117, 119, 121, 123]:
+        assert step in failures
+
+
+def test_validate_critical_steps_phase3_complete(validator, temp_working_dir):
+    """Test critical steps when Phase 3 is complete."""
+    # Create all Phase 3 critical files
+    (temp_working_dir / "03-thesis" / "thesis-outline.md").write_text("# Outline")
+    for i in range(1, 6):
+        (temp_working_dir / "03-thesis" / f"chapter{i}-test.md").write_text(f"# Ch {i}")
+    (temp_working_dir / "03-thesis" / "thesis-final.md").write_text("# Final")
+    (temp_working_dir / "03-thesis" / "references.md").write_text("# Refs")
+
+    failures = validator.validate_critical_steps()
+
+    # Phase 3 steps should not be in failures
+    for step in [111, 115, 117, 119, 121, 123, 129, 130]:
+        assert step not in failures
+
+
+# ============================================================================
+# Completion Rate Tests
+# ============================================================================
+
+def test_completion_rate_zero(validator):
+    """Test completion rate when nothing is done."""
+    stats = validator.get_completion_rate()
+
+    assert stats["completed_steps"] == 0
+    assert stats["completion_rate"] == 0.0
+    assert stats["missing_steps"] == stats["total_required_steps"]
+
+
+def test_completion_rate_partial(validator, temp_working_dir):
+    """Test completion rate with partial completion."""
+    # Complete phase 0 only
+    (temp_working_dir / "00-session" / "session.json").write_text("{}")
+    (temp_working_dir / "00-session" / "todo-checklist.md").write_text("# Checklist")
+
+    stats = validator.get_completion_rate()
+
+    assert stats["completed_steps"] == 2
+    assert 0 < stats["completion_rate"] < 100
+    assert stats["missing_steps"] > 0
+
+
+def test_completion_rate_full(validator, temp_working_dir):
+    """Test completion rate when all critical files exist."""
+    # Create all required files (simplified - just test the logic)
+    for step, patterns in REQUIRED_OUTPUTS.items():
+        for pattern in patterns:
+            file_path = temp_working_dir / pattern.replace("*", "test")
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_text("test content")
+
+    stats = validator.get_completion_rate()
+
+    assert stats["completed_steps"] == stats["total_required_steps"]
+    assert stats["completion_rate"] == 100.0
+    assert stats["missing_steps"] == 0
+
+
+# ============================================================================
+# Dependency Validation Tests
+# ============================================================================
+
+def test_dependency_no_requirements(dep_validator):
+    """Test dependency validation for steps with no dependencies."""
+    success, missing = dep_validator.validate_dependencies(115)
+    assert success is True
+    assert missing == []
+
+
+def test_dependency_missing(dep_validator, temp_working_dir):
+    """Test dependency validation when dependencies are missing."""
+    # Step 117 (Ch.2) depends on step 115 (Ch.1)
+    success, missing = dep_validator.validate_dependencies(117)
+    assert success is False
+    assert 115 in missing
+
+
+def test_dependency_satisfied(dep_validator, temp_working_dir):
+    """Test dependency validation when dependencies are satisfied."""
+    # Create Ch.1 to satisfy Ch.2 dependency
+    (temp_working_dir / "03-thesis" / "chapter1-test.md").write_text("# Ch 1")
+
+    success, missing = dep_validator.validate_dependencies(117)
+    assert success is True
+    assert missing == []
+
+
+def test_dependency_chain(dep_validator, temp_working_dir):
+    """Test validation of dependency chain."""
+    # Step 119 (Ch.3) depends on 115 (Ch.1) and 117 (Ch.2)
+    success, missing = dep_validator.validate_dependencies(119)
+    assert success is False
+    assert 115 in missing
+    assert 117 in missing
+
+    # Create Ch.1
+    (temp_working_dir / "03-thesis" / "chapter1-test.md").write_text("# Ch 1")
+    success, missing = dep_validator.validate_dependencies(119)
+    assert success is False
+    assert 115 not in missing
+    assert 117 in missing
+
+    # Create Ch.2
+    (temp_working_dir / "03-thesis" / "chapter2-test.md").write_text("# Ch 2")
+    success, missing = dep_validator.validate_dependencies(119)
+    assert success is True
+    assert missing == []
+
+
+def test_enforce_dependencies_raises_error(dep_validator):
+    """Test that enforce_dependencies raises DependencyError."""
+    with pytest.raises(DependencyError, match="Step 117 cannot execute"):
+        dep_validator.enforce_dependencies(117)
+
+
+def test_enforce_dependencies_passes(dep_validator, temp_working_dir):
+    """Test that enforce_dependencies passes when satisfied."""
+    (temp_working_dir / "03-thesis" / "chapter1-test.md").write_text("# Ch 1")
+
+    # Should not raise
+    dep_validator.enforce_dependencies(117)
+
+
+# ============================================================================
+# Integration Tests (Realistic Scenarios)
+# ============================================================================
+
+def test_realistic_chapter_missing_scenario(validator):
+    """Test realistic scenario from the bug report: Ch.2 and Ch.3 missing."""
+    # This reproduces the actual bug found in testing
+    failures = {}
+
+    for step in [115, 117, 119, 121, 123]:
+        success, missing = validator.validate_step(step)
+        if not success:
+            failures[step] = missing
+
+    # All chapters should be missing initially
+    assert len(failures) == 5
+    assert 115 in failures  # Ch.1
+    assert 117 in failures  # Ch.2 (bug: was skipped)
+    assert 119 in failures  # Ch.3 (bug: was skipped)
+    assert 121 in failures  # Ch.4
+    assert 123 in failures  # Ch.5
+
+
+def test_realistic_partial_completion_scenario(validator, temp_working_dir):
+    """Test the actual bug scenario: Ch.1, 4, 5 exist but Ch.2, 3 missing."""
+    # Reproduce the actual test results
+    (temp_working_dir / "03-thesis" / "chapter1-introduction.md").write_text("# Ch 1")
+    (temp_working_dir / "03-thesis" / "chapter4-results.md").write_text("# Ch 4")
+    (temp_working_dir / "03-thesis" / "chapter5-conclusion.md").write_text("# Ch 5")
+    # Ch.2 and Ch.3 intentionally missing
+
+    failures = {}
+    for step in [115, 117, 119, 121, 123]:
+        success, missing = validator.validate_step(step)
+        if not success:
+            failures[step] = missing
+
+    # Should detect Ch.2 and Ch.3 missing
+    assert 115 not in failures  # Ch.1 exists
+    assert 117 in failures      # Ch.2 missing ⭐
+    assert 119 in failures      # Ch.3 missing ⭐
+    assert 121 not in failures  # Ch.4 exists
+    assert 123 not in failures  # Ch.5 exists
+
+
+# ============================================================================
+# Run Tests
+# ============================================================================
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v", "--tb=short"])

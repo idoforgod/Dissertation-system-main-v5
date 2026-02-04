@@ -1,0 +1,443 @@
+#!/usr/bin/env python3
+"""Unit tests for validated_executor.py.
+
+These tests verify that the validated executor correctly wraps
+agent execution with pre/post validation.
+"""
+
+import pytest
+from pathlib import Path
+import tempfile
+import shutil
+import sys
+
+# Add scripts directory to path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / ".claude" / "skills" / "thesis-orchestrator" / "scripts"))
+
+from validated_executor import (
+    ValidatedExecutor,
+    ExecutionResult,
+    should_use_validation,
+    create_executor
+)
+from workflow_validator import ValidationError, DependencyError
+
+
+# ============================================================================
+# Fixtures
+# ============================================================================
+
+@pytest.fixture
+def temp_working_dir():
+    """Create a temporary working directory for testing."""
+    temp_dir = Path(tempfile.mkdtemp())
+
+    # Create phase directories
+    (temp_dir / "00-session").mkdir(parents=True)
+    (temp_dir / "01-literature").mkdir(parents=True)
+    (temp_dir / "02-research-design").mkdir(parents=True)
+    (temp_dir / "03-thesis").mkdir(parents=True)
+    (temp_dir / "04-publication").mkdir(parents=True)
+
+    yield temp_dir
+
+    # Cleanup
+    shutil.rmtree(temp_dir)
+
+
+@pytest.fixture
+def executor(temp_working_dir):
+    """Create an executor instance."""
+    return ValidatedExecutor(temp_working_dir, fail_fast=True)
+
+
+@pytest.fixture
+def executor_no_fail_fast(temp_working_dir):
+    """Create an executor with fail_fast disabled."""
+    return ValidatedExecutor(temp_working_dir, fail_fast=False)
+
+
+# ============================================================================
+# Basic Execution Tests
+# ============================================================================
+
+def test_executor_initialization(temp_working_dir):
+    """Test that executor initializes correctly."""
+    executor = ValidatedExecutor(temp_working_dir)
+    assert executor.working_dir == temp_working_dir
+    assert executor.fail_fast is True
+    assert executor.total_steps == 0
+    assert executor.successful_steps == 0
+    assert executor.failed_steps == 0
+
+
+def test_executor_initialization_no_fail_fast(temp_working_dir):
+    """Test executor with fail_fast disabled."""
+    executor = ValidatedExecutor(temp_working_dir, fail_fast=False)
+    assert executor.fail_fast is False
+
+
+def test_executor_nonexistent_directory():
+    """Test that executor raises error for nonexistent directory."""
+    with pytest.raises(ValueError, match="does not exist"):
+        ValidatedExecutor(Path("/nonexistent/directory"))
+
+
+# ============================================================================
+# Successful Execution Tests
+# ============================================================================
+
+def test_execute_step_skip_all_validation(executor, temp_working_dir):
+    """Test execution with all validations skipped."""
+    # Define a simple agent function
+    def dummy_agent():
+        return {"status": "completed"}
+
+    result = executor.execute_step(
+        step=2,  # Step 2 has no requirements
+        agent_function=dummy_agent,
+        agent_name="test-agent",
+        skip_pre_validation=True,
+        skip_post_validation=True
+    )
+
+    assert result.success is True
+    assert result.step == 2
+    assert result.agent_name == "test-agent"
+    assert result.error is None
+    assert executor.total_steps == 1
+    assert executor.successful_steps == 1
+    assert executor.failed_steps == 0
+
+
+def test_execute_step_with_post_validation_success(executor, temp_working_dir):
+    """Test execution with post-validation that succeeds."""
+    # Create required file
+    (temp_working_dir / "00-session" / "session.json").write_text("{}")
+
+    def dummy_agent():
+        return {"status": "completed"}
+
+    result = executor.execute_step(
+        step=1,  # Step 1 requires session.json
+        agent_function=dummy_agent,
+        agent_name="test-agent",
+        skip_pre_validation=True  # Skip pre since we're testing post
+    )
+
+    assert result.success is True
+    assert result.post_validation.success is True
+    assert executor.successful_steps == 1
+
+
+def test_execute_step_creates_required_output(executor, temp_working_dir):
+    """Test execution where agent creates required output."""
+    def agent_that_creates_file():
+        # Agent creates the required file
+        (temp_working_dir / "00-session" / "session.json").write_text("{}")
+        return {"status": "completed"}
+
+    result = executor.execute_step(
+        step=1,
+        agent_function=agent_that_creates_file,
+        agent_name="init-agent",
+        skip_pre_validation=True
+    )
+
+    assert result.success is True
+    assert result.post_validation.success is True
+
+
+# ============================================================================
+# Dependency Validation Tests
+# ============================================================================
+
+def test_execute_step_dependency_failure_fail_fast(executor):
+    """Test that dependency failure raises error in fail-fast mode."""
+    def dummy_agent():
+        return {"status": "completed"}
+
+    # Step 117 (Ch.2) requires step 115 (Ch.1) which doesn't exist
+    with pytest.raises(DependencyError, match="Step 117 cannot execute"):
+        executor.execute_step(
+            step=117,
+            agent_function=dummy_agent,
+            agent_name="chapter2-writer"
+        )
+
+
+def test_execute_step_dependency_failure_no_fail_fast(executor_no_fail_fast):
+    """Test that dependency failure doesn't raise error when fail_fast=False."""
+    def dummy_agent():
+        return {"status": "completed"}
+
+    result = executor_no_fail_fast.execute_step(
+        step=117,
+        agent_function=dummy_agent,
+        agent_name="chapter2-writer"
+    )
+
+    assert result.success is False
+    assert result.pre_validation.success is False
+    assert executor_no_fail_fast.failed_steps == 1
+
+
+def test_execute_step_dependency_satisfied(executor, temp_working_dir):
+    """Test execution when dependencies are satisfied."""
+    # Create Ch.1 to satisfy Ch.2 dependency
+    (temp_working_dir / "03-thesis" / "chapter1-test.md").write_text("# Ch 1")
+
+    def agent_creates_ch2():
+        (temp_working_dir / "03-thesis" / "chapter2-test.md").write_text("# Ch 2")
+        return {"status": "completed"}
+
+    result = executor.execute_step(
+        step=117,
+        agent_function=agent_creates_ch2,
+        agent_name="chapter2-writer"
+    )
+
+    assert result.success is True
+    assert result.pre_validation.success is True
+    assert result.post_validation.success is True
+
+
+# ============================================================================
+# Output Validation Tests
+# ============================================================================
+
+def test_execute_step_output_validation_failure_fail_fast(executor):
+    """Test that output validation failure raises error in fail-fast mode."""
+    def agent_that_does_nothing():
+        # Agent completes but doesn't create required file
+        return {"status": "completed"}
+
+    with pytest.raises(ValidationError, match="Step 1 validation failed"):
+        executor.execute_step(
+            step=1,  # Step 1 requires session.json
+            agent_function=agent_that_does_nothing,
+            agent_name="broken-agent",
+            skip_pre_validation=True
+        )
+
+
+def test_execute_step_output_validation_failure_no_fail_fast(executor_no_fail_fast):
+    """Test that output validation failure doesn't raise when fail_fast=False."""
+    def agent_that_does_nothing():
+        return {"status": "completed"}
+
+    result = executor_no_fail_fast.execute_step(
+        step=1,
+        agent_function=agent_that_does_nothing,
+        agent_name="broken-agent",
+        skip_pre_validation=True
+    )
+
+    assert result.success is False
+    assert result.post_validation.success is False
+    assert executor_no_fail_fast.failed_steps == 1
+
+
+# ============================================================================
+# Agent Execution Error Tests
+# ============================================================================
+
+def test_execute_step_agent_raises_error_fail_fast(executor):
+    """Test that agent error is propagated in fail-fast mode."""
+    def agent_that_fails():
+        raise RuntimeError("Agent failed!")
+
+    with pytest.raises(RuntimeError, match="Agent failed!"):
+        executor.execute_step(
+            step=2,
+            agent_function=agent_that_fails,
+            agent_name="broken-agent",
+            skip_pre_validation=True,
+            skip_post_validation=True
+        )
+
+
+def test_execute_step_agent_raises_error_no_fail_fast(executor_no_fail_fast):
+    """Test that agent error is captured when fail_fast=False."""
+    def agent_that_fails():
+        raise RuntimeError("Agent failed!")
+
+    result = executor_no_fail_fast.execute_step(
+        step=2,
+        agent_function=agent_that_fails,
+        agent_name="broken-agent",
+        skip_pre_validation=True,
+        skip_post_validation=True
+    )
+
+    assert result.success is False
+    assert isinstance(result.error, RuntimeError)
+    assert str(result.error) == "Agent failed!"
+    assert executor_no_fail_fast.failed_steps == 1
+
+
+# ============================================================================
+# Execution History Tests
+# ============================================================================
+
+def test_execution_history_tracking(executor, temp_working_dir):
+    """Test that execution history is tracked correctly."""
+    # Create required files
+    (temp_working_dir / "00-session" / "session.json").write_text("{}")
+    (temp_working_dir / "00-session" / "todo-checklist.md").write_text("# Checklist")
+
+    def dummy_agent():
+        return {"status": "completed"}
+
+    # Execute two steps
+    executor.execute_step(1, dummy_agent, "agent1", skip_pre_validation=True)
+    executor.execute_step(7, dummy_agent, "agent2", skip_pre_validation=True)
+
+    assert len(executor.execution_history) == 2
+    assert executor.execution_history[0].step == 1
+    assert executor.execution_history[1].step == 7
+
+
+def test_statistics(executor, temp_working_dir):
+    """Test execution statistics."""
+    (temp_working_dir / "00-session" / "session.json").write_text("{}")
+
+    def success_agent():
+        return {"status": "completed"}
+
+    def fail_agent():
+        raise RuntimeError("Failed")
+
+    # Execute successful step
+    executor.execute_step(1, success_agent, "agent1", skip_pre_validation=True)
+
+    # Execute failing step (will raise in fail-fast mode, so use try-catch)
+    try:
+        executor.execute_step(2, fail_agent, "agent2", skip_pre_validation=True, skip_post_validation=True)
+    except RuntimeError:
+        pass
+
+    stats = executor.get_statistics()
+    assert stats["total_steps"] == 2
+    assert stats["successful_steps"] == 1
+    assert stats["failed_steps"] == 1  # Failure is recorded before exception is raised
+    assert stats["success_rate"] == 50.0
+
+
+def test_statistics_no_fail_fast(executor_no_fail_fast, temp_working_dir):
+    """Test statistics when fail_fast is disabled."""
+    (temp_working_dir / "00-session" / "session.json").write_text("{}")
+
+    def success_agent():
+        return {"status": "completed"}
+
+    def fail_agent():
+        raise RuntimeError("Failed")
+
+    # Execute successful step
+    executor_no_fail_fast.execute_step(1, success_agent, "agent1", skip_pre_validation=True)
+
+    # Execute failing step
+    executor_no_fail_fast.execute_step(2, fail_agent, "agent2", skip_pre_validation=True, skip_post_validation=True)
+
+    stats = executor_no_fail_fast.get_statistics()
+    assert stats["total_steps"] == 2
+    assert stats["successful_steps"] == 1
+    assert stats["failed_steps"] == 1
+    assert stats["success_rate"] == 50.0
+
+
+# ============================================================================
+# Phase Execution Tests
+# ============================================================================
+
+def test_execute_phase(executor, temp_working_dir):
+    """Test phase execution with multiple steps."""
+    # Create required files
+    (temp_working_dir / "00-session" / "session.json").write_text("{}")
+    (temp_working_dir / "00-session" / "todo-checklist.md").write_text("# Checklist")
+
+    def agent1():
+        return {"status": "completed"}
+
+    def agent2():
+        return {"status": "completed"}
+
+    # Execute phase 0 (steps 1 and 7)
+    agent_mappings = {
+        1: (agent1, "init-agent"),
+        7: (agent2, "checklist-agent")
+    }
+
+    results = executor.execute_phase(0, agent_mappings)
+
+    assert len(results) == 2
+    assert all(r.success for r in results.values())
+    assert executor.successful_steps == 2
+
+
+def test_execute_phase_stops_on_failure_fail_fast(executor):
+    """Test that phase execution stops on first failure in fail-fast mode."""
+    def success_agent():
+        return {"status": "completed"}
+
+    def fail_agent():
+        raise RuntimeError("Failed")
+
+    agent_mappings = {
+        1: (fail_agent, "failing-agent"),
+        7: (success_agent, "success-agent")
+    }
+
+    # Should stop after first failure
+    with pytest.raises(RuntimeError):
+        executor.execute_phase(0, agent_mappings)
+
+    # Only first step should be attempted
+    assert executor.total_steps == 1
+
+
+# ============================================================================
+# Environment Variable Tests
+# ============================================================================
+
+def test_should_use_validation_false_by_default(monkeypatch):
+    """Test that validation is disabled by default."""
+    monkeypatch.delenv("USE_VALIDATION", raising=False)
+    assert should_use_validation() is False
+
+
+def test_should_use_validation_true(monkeypatch):
+    """Test that validation is enabled when USE_VALIDATION=true."""
+    monkeypatch.setenv("USE_VALIDATION", "true")
+    assert should_use_validation() is True
+
+
+def test_should_use_validation_various_values(monkeypatch):
+    """Test various TRUE values for USE_VALIDATION."""
+    for value in ["true", "True", "TRUE", "1", "yes", "YES"]:
+        monkeypatch.setenv("USE_VALIDATION", value)
+        assert should_use_validation() is True
+
+
+def test_create_executor_enabled(monkeypatch, temp_working_dir):
+    """Test create_executor returns executor when validation enabled."""
+    monkeypatch.setenv("USE_VALIDATION", "true")
+    executor = create_executor(temp_working_dir)
+    assert executor is not None
+    assert isinstance(executor, ValidatedExecutor)
+
+
+def test_create_executor_disabled(monkeypatch, temp_working_dir):
+    """Test create_executor returns None when validation disabled."""
+    monkeypatch.delenv("USE_VALIDATION", raising=False)
+    executor = create_executor(temp_working_dir)
+    assert executor is None
+
+
+# ============================================================================
+# Run Tests
+# ============================================================================
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v", "--tb=short"])

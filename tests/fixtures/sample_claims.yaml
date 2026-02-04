@@ -1,0 +1,48 @@
+claims:
+  - id: "LIT-001"
+    text: "조직 몰입과 직무 성과 간에는 정적 상관관계가 있다"
+    claim_type: EMPIRICAL
+    sources:
+      - type: PRIMARY
+        reference: "Meyer & Allen (1991), Journal of Applied Psychology"
+        doi: "10.1037/0021-9010.76.6.733"
+        verified: true
+    confidence: 92
+    uncertainty: "개인 수준 분석에 한정"
+
+  - id: "LIT-002"
+    text: "변혁적 리더십은 조직 혁신에 긍정적 영향을 미친다"
+    claim_type: EMPIRICAL
+    sources:
+      - type: PRIMARY
+        reference: "Bass & Avolio (1994), Improving Organizational Effectiveness"
+        doi: "10.4135/9781452204932"
+        verified: true
+    confidence: 88
+    uncertainty: "문화적 맥락에 따른 차이 존재"
+
+  - id: "TH-001"
+    text: "자원기반관점에 따르면 조직의 경쟁우위는 가치있고 희소한 자원에서 비롯된다"
+    claim_type: THEORETICAL
+    sources:
+      - type: PRIMARY
+        reference: "Barney (1991), Journal of Management"
+        doi: "10.1177/014920639101700108"
+        verified: true
+    confidence: 95
+    uncertainty: null
+
+invalid_claims:
+  - id: "BAD-001"
+    text: "모든 연구가 일치하며 예외 없이 성립한다"
+    claim_type: EMPIRICAL
+    sources: []
+    confidence: 100
+    uncertainty: null
+
+  - id: "BAD-002"
+    text: "효과크기 d = 0.8로 매우 크다"
+    claim_type: EMPIRICAL
+    sources: []
+    confidence: 85
+    uncertainty: null

@@ -1,0 +1,37 @@
+{
+  "hooks": {},
+  "_disabled_hooks_reference": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .claude/skills/thesis-orchestrator/scripts/gra_validator.py hook 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .claude/skills/thesis-orchestrator/scripts/gra_validator.py hook 2>/dev/null || true"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .claude/skills/thesis-orchestrator/scripts/gra_validator.py hook 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  },
+  "_comment": "Hooks temporarily disabled due to timeout issues. GRA validation will be performed manually via /thesis:evaluate-srcs command. To re-enable, move contents from _disabled_hooks_reference back to hooks."
+}

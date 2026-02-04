@@ -1,0 +1,40 @@
+{
+  "version": "2.1.0",
+  "working_dir": "ai-transformation-ax-framework-for-small-churches-2026-01-21",
+  "created_at": "2026-01-21T01:10:40Z",
+  "updated_at": "2026-01-21T01:10:40Z",
+  "research": {
+    "topic": "AI Transformation (AX) Framework for Small Churches: Developing Applicable AI-based Innovation Models for Ministry, Administration, Education, and Mission under Resource Constraints",
+    "topic_slug": "ai-transformation-ax-framework-for-small-churches",
+    "mode": "topic",
+    "type": null,
+    "discipline": "Business Administration",
+    "research_questions": [],
+    "hypotheses": []
+  },
+  "workflow": {
+    "current_phase": "phase0",
+    "current_step": 1,
+    "total_steps": 150,
+    "last_checkpoint": null,
+    "last_agent": null
+  },
+  "paths": {
+    "base_dir": "../../../thesis-output",
+    "output_dir": "ai-transformation-ax-framework-for-small-churches-2026-01-21",
+    "absolute_path": "/Users/cys/Desktop/AIagentsAutomation/Dissertation-system-main-v1/.claude/thesis-output/ai-transformation-ax-framework-for-small-churches-2026-01-21"
+  },
+  "options": {
+    "literature_depth": "comprehensive",
+    "theoretical_framework": "existing",
+    "citation_style": "apa7",
+    "language": "korean",
+    "thesis_format": "traditional_5chapter"
+  },
+  "quality": {
+    "srcs_scores": [],
+    "gra_validations": [],
+    "plagiarism_checks": []
+  },
+  "context_snapshots": []
+}
